@@ -49,7 +49,7 @@ function printFiringSolution(result) {
 
 
 
-TargetsCordinates = fs.readFileSync('targets_coordinates.json');
+let TargetsCordinates = fs.readFileSync('targets_coordinates.json');
 const targets = JSON.parse(TargetsCordinates);
 
 let map = MAPS[1];//ANVIL

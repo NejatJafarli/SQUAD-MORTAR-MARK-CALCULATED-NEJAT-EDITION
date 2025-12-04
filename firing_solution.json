@@ -1,56 +1,9 @@
 {
-  "weapon": {
-    "kp": "H05-1-6",
-    "coordinates": {
-      "lat": -124.15032679738562,
-      "lng": 186.93899782135074
-    },
-    "height": 0
-  },
-  "target": {
-    "kp": "E03-2-7",
-    "coordinates": {
-      "lat": -69.92374727668845,
-      "lng": 112.73420479302833
-    },
-    "height": 0
-  },
-  "ballistics": {
-    "distance": "1073.4m",
-    "bearing": "306.2°",
-    "heightDiff": "0.0m",
-    "lowAngle": {
-      "elevation": {
-        "degrees": "NaN°",
-        "mils": "NaN mil",
-        "radians": null
-      },
-      "timeOfFlight": "NaNs",
-      "spread": {
-        "horizontal": "NaNm",
-        "vertical": "NaNm"
-      }
-    },
-    "highAngle": {
-      "elevation": {
-        "degrees": "59.94°",
-        "mils": "1065.5 mil",
-        "radians": 1.0460842829802066
-      },
-      "timeOfFlight": "19.5s",
-      "spread": {
-        "horizontal": "31.1m",
-        "vertical": "17.9m"
-      }
-    }
-  },
-  "weapon_info": {
-    "name": "Mortar",
-    "velocity": "110 m/s",
-    "type": "deployables"
-  },
-  "map": {
-    "name": "Anvil",
-    "size": "3060m x 3060m"
-  }
+    "timestamp": "2025-12-04T18:55:03.053Z",
+    "player": "G07-8-6-1-3",
+    "marker": "G07-3-4-1-1",
+    "elevation": 1517.1281027893644,
+    "elevationUnit": "mil",
+    "bearing": 172.6139568487327,
+    "distance": 201.7
 }

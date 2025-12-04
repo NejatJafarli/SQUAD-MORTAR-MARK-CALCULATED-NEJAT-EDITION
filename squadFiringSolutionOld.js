@@ -1,44 +1,11 @@
 import { WEAPONS } from "./data/weapons.js";
-import SquadHeightmap from "./squadHeightmaps.js";
 import { Weapon } from "./squadWeapons.js";
 
 export default class SquadFiringSolution {
 
-
-
-
-
-    /**
-     * Generates array with [x,y] dimensions of map, based on the minimap corner transforms from SquadSDK
-     * @param {Number[]} fCorner - [x,y] positon of north west corner of minimap in SquadSDK
-     * @param {Number[]} sCorner - [x,y] positon of south east corner of minimap in SquadSDK
-     * @returns {Number[]} - bounds array with lengths of x and y dimensions of map
-     */
-    bounds(fCorner, sCorner) {
-        // using min and max so that it doesn't matter which corners are used, as long as they are opposite to each other
-        const xM = Math.max(fCorner[0], sCorner[0]) - Math.min(fCorner[0], sCorner[0]);
-        const yM = Math.max(fCorner[1], sCorner[1]) - Math.min(fCorner[1], sCorner[1]);
-        return [xM, yM];
-    }
-
-    /**
- * Calculates the final z-scaling of a heightmap,
- * by taking the black and white levels used in gimp to optimize the heightmap,
- * and the zScale of the UE4 landscape transform in meters from SquadSDK
- * @param {number} bLevel - optimized black level from original heightmap
- * @param {number} wLevel - optimized white level from original heightmap
- * @param {number} zScale - original zScale of landscape transform in SquadSDK in meters
- * @returns {number} final scaling
- */
-    scale(bLevel, wLevel, zScale) {
-        const levelRange = (wLevel - bLevel) / 10000;
-        return (512 * levelRange * zScale) / 512;
-    }
-
-    constructor(weaponCordinates, targetCordinates, map, heightmap, heightPadding, gravity = 9.78) {
-
-        this.weaponKp = weaponCordinates;
-        this.targetKp = targetCordinates;
+    constructor(weaponLatLng, targetLatLng, map, heightPadding,heightmap) {
+        this.map = map;
+        this.heightmap = heightmap;
 
         this.activeWeapon = new Weapon(
             WEAPONS[0].name,
@@ -66,51 +33,22 @@ export default class SquadFiringSolution {
             WEAPONS[0].projectileLifespan
         );
 
-        this.map = map;
 
-        map.size = this.bounds(map.SDK_data.minimap.corner0, map.SDK_data.minimap.corner1)[0];
-        map.sizeY = this.bounds(map.SDK_data.minimap.corner0, map.SDK_data.minimap.corner1)[1];
-        map.scaling = this.scale(
-            map.SDK_data?.heightmap?.BWlevels?.[0] ?? 0,
-            map.SDK_data?.heightmap?.BWlevels?.[1] ?? 0,
-            map.SDK_data?.heightmap?.scale?.[2] ?? 1
-        ) || 1;
-
-
-        this.gameToMapScale = 256 / this.map.size;
-        this.gameToMapScaleY = 256 / this.map.sizeY;
-        this.mapToGameScale = this.map.size / 256;
-        console.log(this.map.size);
-
-        console.log("Map to Game Scale X:", this.mapToGameScale);
-
-
-        let weaponPos = this.getPos(weaponCordinates);
-        let targetPos = this.getPos(targetCordinates);
-
-        weaponPos = { lat: -weaponPos.lng * this.gameToMapScale, lng: weaponPos.lat * this.gameToMapScale };
-        targetPos = { lat: -targetPos.lng * this.gameToMapScale, lng: targetPos.lat * this.gameToMapScale };
-
-        this.weaponLatLng = weaponPos;
-        this.targetLatLng = targetPos;
-
-        console.log("Weapon LatLng:", this.weaponLatLng);
-        console.log("Target LatLng:", this.targetLatLng);
-
-
+        this.weaponLatLng = weaponLatLng;
+        this.targetLatLng = targetLatLng;
         this.moa = this.degToRad((this.activeWeapon.moa) / 60);
-        this.gravity = gravity * this.activeWeapon.gravityScale;
+        this.gravity = 9.78 * this.activeWeapon.gravityScale;
         this.distance = this.getDist();
         this.bearing = this.getBearing(this.weaponLatLng, this.targetLatLng);
         this.velocity = this.activeWeapon.getVelocity(this.distance);
 
-        this.heightMap = heightmap;
 
-        this.weaponHeight = this.heightMap.getHeight(this.weaponLatLng) + parseFloat(heightPadding);
-        this.targetHeight = this.heightMap.getHeight(this.targetLatLng);
+        this.weaponHeight = this.heightmap.getHeight(weaponLatLng) + parseFloat(heightPadding);
+        this.targetHeight = this.heightmap.getHeight(targetLatLng);
 
         console.log("Weapon Height:", this.weaponHeight);
         console.log("Target Height:", this.targetHeight);
+
 
         this.heightDiff = this.targetHeight - this.weaponHeight;
         this.elevation = { low: [], high: [] };
@@ -133,85 +71,13 @@ export default class SquadFiringSolution {
 
 
     /**
-        * Format keypad input, setting text to uppercase and adding dashes
-        * @param {string} text - keypad string to be formatted
-        * @returns {string} formatted string
-        */
-    formatKeyPad(text) {
-        const TEXTPARTS = [];
-
-        // If empty string, return
-        if (text.length === 0) { return; }
-
-        const TEXTND = text.toUpperCase().split("-").join("");
-        TEXTPARTS.push(TEXTND.slice(0, 3));
-
-        // iteration through sub-keypads
-        let i = 3;
-        while (i < TEXTND.length) {
-            TEXTPARTS.push(TEXTND.slice(i, i + 1));
-            i += 1;
-        }
-
-        return TEXTPARTS.join("-");
-    }
-    /**
-     * Returns the latlng coordinates based on the given keypad string.
-     * Supports unlimited amount of sub-keypads.
-     * Throws error if keypad string is too short or parsing results in invalid latlng coordinates.
-     * @param {string} kp - keypad coordinates, e.g. "A02-3-5-2"
-     * @returns {LatLng} converted coordinates
-     */
-    getPos(kp) {
-        const FORMATTED_KEYPAD = this.formatKeyPad(kp);
-        const PARTS = FORMATTED_KEYPAD.split("-");
-        let interval;
-        let lat = 0;
-        let lng = 0;
-        let i = 0;
-
-        while (i < PARTS.length) {
-            if (i === 0) {
-                // special case, i.e. letter + number combo
-                const LETTERCODE = PARTS[i].charCodeAt(0);
-                const LETTERINDEX = LETTERCODE - 65;
-                if (PARTS[i].charCodeAt(0) < 65) { return { lat: NaN, lng: NaN }; }
-                const KEYPADNB = Number(PARTS[i].slice(1)) - 1;
-                lat += 300 * LETTERINDEX;
-                lng += 300 * KEYPADNB;
-
-            } else {
-                // opposite of calculations in getKP()
-                const SUB = Number(PARTS[i]);
-                if (Number.isNaN(SUB)) {
-                    console.debug(`invalid keypad string: ${FORMATTED_KEYPAD}`);
-                }
-                const subX = (SUB - 1) % 3;
-                const subY = 2 - (Math.ceil(SUB / 3) - 1);
-
-                interval = 300 / 3 ** i;
-                lat += interval * subX;
-                lng += interval * subY;
-            }
-            i += 1;
-        }
-
-        // at the end, add half of last interval, so it points to the center of the deepest sub-keypad
-        interval = 300 / 3 ** (i - 1);
-        lat += interval / 2;
-        lng += interval / 2;
-
-        return { lat: lat, lng: lng };
-    }
-
-    /**
      * Calculate ingame distance between weapon & target
      * https://github.com/sh4rkman/SquadCalc/wiki/Deducing-distance-and-bearing#finding-distance
      * @return {number} - distance in meter
      */
     getDist() {
-        const latDelta = (this.targetLatLng.lat - this.weaponLatLng.lat) * -this.mapToGameScale;
-        const lngDelta = (this.targetLatLng.lng - this.weaponLatLng.lng) * this.mapToGameScale;
+        const latDelta = (this.targetLatLng.lat - this.weaponLatLng.lat) * -this.map.mapToGameScale;
+        const lngDelta = (this.targetLatLng.lng - this.weaponLatLng.lng) * this.map.mapToGameScale;
         return Math.hypot(latDelta, lngDelta);
     }
 
@@ -245,8 +111,8 @@ export default class SquadFiringSolution {
      * @returns {number} - bearing required to see B from A
      */
     getBearing() {
-        const latDelta = (this.targetLatLng.lat - this.weaponLatLng.lat) * -this.mapToGameScale;
-        const lngDelta = (this.targetLatLng.lng - this.weaponLatLng.lng) * this.mapToGameScale;
+        const latDelta = (this.targetLatLng.lat - this.weaponLatLng.lat) * -this.map.mapToGameScale;
+        const lngDelta = (this.targetLatLng.lng - this.weaponLatLng.lng) * this.map.mapToGameScale;
         let bearing = Math.atan2(latDelta, lngDelta) * 180 / Math.PI + 90;
         if (bearing < 0) { bearing += 360; } // Avoid Negative Angle by adding a whole rotation
         return bearing;

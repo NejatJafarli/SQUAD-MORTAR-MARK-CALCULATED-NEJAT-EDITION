@@ -12,7 +12,7 @@ export default class SquadHeightmap {
     constructor(map) {
         this.map = map;
         this.width = 500;
-        this.heightmapScaling = this.width / 262; // 262 is the size of the heightmap in-game units
+        this.heightmapScaling = this.width / 256; // 256 is the size of the heightmap in-game units
         let heightmapPath = `${this.map.mapURL}heightmap.json`;
         this.json = [];
         this.loadHeightmapJson(heightmapPath);
