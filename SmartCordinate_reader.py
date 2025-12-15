@@ -15,6 +15,7 @@ from tkinter import font as tkfont
 from PIL import Image
 import threading
 from pynput import keyboard
+from collections import defaultdict
 
 # Configure Tesseract OCR path
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
@@ -33,13 +34,13 @@ SCENE_WIDTH, SCENE_HEIGHT = 1800, 1300
 # Internal marker position (center of cropped area)
 INTERNAL_MARKER_COORDS = (150, 150)
 
+# Grid cell size (piksel)
+CELL_SIZE = 145
+
 # Colors to detect
 PLAYER_COLOR_RGB = (217, 217, 0)    # Yellow player icon
 PLAYER_TOLERANCE = 30                # Higher tolerance for yellow
-# MARKER_COLOR_RGB = (255, 195, 0)   # Green marker (adjusted for darker shade)
-# MARKER_COLOR_RGB = (124, 233, 68)   # Green marker
-MARKER_COLOR_RGB = (73, 182, 23)   # Green marker
-
+MARKER_COLOR_RGB = (73, 182, 23)    # Green marker
 MARKER_TOLERANCE = 50                # Higher tolerance for marker detection
 
 # Update interval (seconds)
@@ -60,7 +61,7 @@ last_known_coords = {
 # Player lock state
 player_locked = False
 locked_player_coord = None
-\
+
 # Marker lock state
 marker_locked = False
 locked_marker_coord = None
@@ -194,145 +195,256 @@ def detect_color_position(image, target_rgb, tolerance=20, debug_name=""):
         return None
 
 
-def detect_grid_lines(image):
-    """Detect grid lines in an image"""
+#####################################
+# SMART GRID DETECTION
+#####################################
+def find_closest_line(lines, marker_coord, orientation='horizontal', direction='before'):
+    """
+    Marker'a en yakın çizgiyi bul
+    
+    orientation: 'horizontal' (yatay) veya 'vertical' (dikey)
+    direction: 'before' (üstte/solda) veya 'after' (altta/sağda)
+    """
+    if not lines:
+        return None
+    
+    if orientation == 'horizontal':
+        # Yatay çizgiler - Y koordinatına bak
+        line_positions = [(l, l[1]) for l in lines]
+        marker_pos = marker_coord[1]  # marker_y
+    else:
+        # Dikey çizgiler - X koordinatına bak
+        line_positions = [(l, l[0]) for l in lines]
+        marker_pos = marker_coord[0]  # marker_x
+    
+    # Direction'a göre filtrele
+    if direction == 'before':
+        # Marker'dan önce (üstte veya solda)
+        candidates = [(l, pos) for l, pos in line_positions if pos < marker_pos]
+        if not candidates:
+            return None
+        # En yakını bul (max)
+        return max(candidates, key=lambda x: x[1])[0]
+    else:
+        # Marker'dan sonra (altta veya sağda)
+        candidates = [(l, pos) for l, pos in line_positions if pos >= marker_pos]
+        if not candidates:
+            return None
+        # En yakını bul (min)
+        return min(candidates, key=lambda x: x[1])[0]
+
+
+def merge_close_lines(lines, orientation, threshold=10):
+    """Yakın çizgileri birleştir"""
+    if not lines:
+        return []
+    
+    coord_idx = 1 if orientation == 'horizontal' else 0
+    sorted_lines = sorted(lines, key=lambda l: l[coord_idx])
+    
+    merged = []
+    current_group = [sorted_lines[0]]
+    
+    for i in range(1, len(sorted_lines)):
+        current_coord = sorted_lines[i][coord_idx]
+        prev_coord = current_group[-1][coord_idx]
+        
+        if abs(current_coord - prev_coord) <= threshold:
+            current_group.append(sorted_lines[i])
+        else:
+            avg_line = average_lines(current_group, orientation)
+            merged.append(avg_line)
+            current_group = [sorted_lines[i]]
+    
+    if current_group:
+        avg_line = average_lines(current_group, orientation)
+        merged.append(avg_line)
+    
+    return merged
+
+
+def average_lines(lines, orientation):
+    """Çizgi grubunun ortalaması"""
+    if orientation == 'horizontal':
+        avg_y = int(np.mean([l[1] for l in lines]))
+        return (lines[0][0], avg_y, lines[0][2], avg_y)
+    else:
+        avg_x = int(np.mean([l[0] for l in lines]))
+        return (avg_x, lines[0][1], avg_x, lines[0][3])
+
+
+def detect_grid_lines_smart(image, marker_coords, cell_size=145, debug=True):
+    """
+    Akıllı grid algılama - Sadece 2 çizgi bul, diğer 2'sini oluştur
+    
+    marker_coords: (x, y) tuple
+    cell_size: Hücre boyutu (piksel) - varsayılan 145
+    """
     try:
+        h, w = image.shape[:2]
+        marker_x, marker_y = marker_coords
+        
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
-        # Enhance contrast to make thin grid lines more visible
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        gray = clahe.apply(gray)
+        # Preprocessing
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
         
-        # Apply bilateral filter to reduce noise while keeping edges
-        gray = cv2.bilateralFilter(gray, 9, 75, 75)
+        # Otsu thresholding
+        _, binary = cv2.threshold(blurred, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
-        # Multiple Canny edge detection passes with different thresholds
-        edges1 = cv2.Canny(gray, 30, 100, apertureSize=3)
-        edges2 = cv2.Canny(gray, 50, 150, apertureSize=3)
-        edges3 = cv2.Canny(gray, 20, 80, apertureSize=3)
+        # Morphological operations - çizgileri güçlendir
+        kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 1))
+        kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 25))
         
-        # Combine all edge detections
-        edges = cv2.bitwise_or(edges1, cv2.bitwise_or(edges2, edges3))
+        horizontal = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_h)
+        vertical = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_v)
         
-        # Save debug image
-        cv2.imwrite("debug_edges.png", edges)
+        grid_structure = cv2.add(horizontal, vertical)
+        edges = cv2.Canny(grid_structure, 50, 150, apertureSize=3)
         
-        # Detect lines with multiple passes and different parameters
-        all_lines = []
+        if debug:
+            cv2.imwrite("debug_01_edges.png", edges)
         
-        # Pass 1: Standard detection
-        lines1 = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=50, 
-                                 minLineLength=30, maxLineGap=15)
-        if lines1 is not None:
-            all_lines.extend(lines1)
+        # Hough Line Transform
+        lines = cv2.HoughLinesP(
+            edges,
+            rho=1,
+            theta=np.pi/180,
+            threshold=50,
+            minLineLength=min(h, w) // 10,
+            maxLineGap=20
+        )
         
-        # Pass 2: More sensitive for thin lines
-        lines2 = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=30, 
-                                 minLineLength=20, maxLineGap=20)
-        if lines2 is not None:
-            all_lines.extend(lines2)
+        if lines is None:
+            print("    ❌ Hiç çizgi algılanamadı!")
+            return None
         
-        # Pass 3: Very sensitive
-        lines3 = cv2.HoughLinesP(edges, rho=1, theta=np.pi/180, threshold=20, 
-                                 minLineLength=15, maxLineGap=25)
-        if lines3 is not None:
-            all_lines.extend(lines3)
+        print(f"    🔍 Ham çizgi sayısı: {len(lines)}")
         
-        print(f"    Raw lines detected: {len(all_lines)}")
+        # Çizgileri kategorize et
+        horizontal_lines = []
+        vertical_lines = []
         
-        line_coordinates = []
-        if all_lines:
-            for line in all_lines:
-                x1, y1, x2, y2 = line[0]
-                angle = np.degrees(np.arctan2(y2 - y1, x2 - x1))
-                
-                # Keep only horizontal and vertical lines (more lenient)
-                if (abs(angle) < 10) or (abs(angle - 90) < 10) or (abs(angle + 90) < 10) or (abs(angle - 180) < 10):
-                    line_coordinates.append((x1, y1, x2, y2))
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            angle = np.degrees(np.arctan2(abs(y2 - y1), abs(x2 - x1)))
+            
+            if angle < 10:  # Horizontal
+                y_avg = (y1 + y2) // 2
+                horizontal_lines.append((0, y_avg, w, y_avg))
+            elif angle > 80:  # Vertical
+                x_avg = (x1 + x2) // 2
+                vertical_lines.append((x_avg, 0, x_avg, h))
         
-        # Draw detected lines on debug image
-        debug_img = image.copy()
-        for line in line_coordinates:
-            x1, y1, x2, y2 = line
-            cv2.line(debug_img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.imwrite("debug_detected_lines.png", debug_img)
+        # Yakın çizgileri birleştir
+        horizontal_lines = merge_close_lines(horizontal_lines, 'horizontal', threshold=10)
+        vertical_lines = merge_close_lines(vertical_lines, 'vertical', threshold=10)
         
-        print(f"    Filtered grid lines: {len(line_coordinates)}")
+        print(f"    📏 Yatay çizgiler: {len(horizontal_lines)}")
+        print(f"    📏 Dikey çizgiler: {len(vertical_lines)}")
+        print(f"    📍 Marker: ({marker_x}, {marker_y})")
         
-        return line_coordinates
+        # 1️⃣ MARKER'IN KUZEYINDE (ÜSTÜNDE) YATAY ÇİZGİ BUL
+        top_line = find_closest_line(horizontal_lines, marker_coords, 'horizontal', 'before')
+        
+        # 2️⃣ MARKER'IN SAĞINDA DİKEY ÇİZGİ BUL  
+        right_line = find_closest_line(vertical_lines, marker_coords, 'vertical', 'after')
+        
+        if top_line is None or right_line is None:
+            print("    ❌ Üst veya sağ çizgi bulunamadı!")
+            print(f"       Üst çizgi: {top_line}")
+            print(f"       Sağ çizgi: {right_line}")
+            return None
+        
+        top_y = top_line[1]
+        right_x = right_line[0]
+        
+        print(f"    ✅ Üst çizgi Y: {top_y}")
+        print(f"    ✅ Sağ çizgi X: {right_x}")
+        
+        # 3️⃣ DİĞER 2 ÇİZGİYİ SABİT MESAFE İLE OLUŞTUR
+        bottom_y = top_y + cell_size
+        left_x = right_x - cell_size
+        
+        print(f"    🔨 Alt çizgi Y: {bottom_y} (üst + {cell_size})")
+        print(f"    🔨 Sol çizgi X: {left_x} (sağ - {cell_size})")
+        
+        # 4 çizgiyi döndür
+        cell_lines = {
+            'top': (0, top_y, w, top_y),
+            'bottom': (0, bottom_y, w, bottom_y),
+            'left': (left_x, 0, left_x, h),
+            'right': (right_x, 0, right_x, h)
+        }
+        
+        # Debug görseli
+        if debug:
+            debug_img = image.copy()
+            cv2.line(debug_img, (0, top_y), (w, top_y), (0, 255, 0), 2)  # Yeşil - üst (gerçek)
+            cv2.line(debug_img, (0, bottom_y), (w, bottom_y), (255, 0, 255), 2)  # Mor - alt (sanal)
+            cv2.line(debug_img, (left_x, 0), (left_x, h), (255, 0, 255), 2)  # Mor - sol (sanal)
+            cv2.line(debug_img, (right_x, 0), (right_x, h), (0, 255, 0), 2)  # Yeşil - sağ (gerçek)
+            cv2.circle(debug_img, (marker_x, marker_y), 10, (0, 0, 255), -1)
+            
+            cv2.imwrite("debug_02_cell_boundaries.png", debug_img)
+        
+        return cell_lines
+    
     except Exception as e:
-        print(f"Grid line detection error: {e}")
-        return []
+        print(f"❌ Hata: {e}")
+        import traceback
+        traceback.print_exc()
+        return None
 
 
-def crop_to_grid_cell(image, grid_lines, marker_coords):
-    """Crop image to the grid cell containing the marker"""
+def crop_to_cell(image, cell_lines, marker_coords, padding=5, debug=True):
+    """
+    Bulunan hücreyi kırp
+    
+    cell_lines: dict with 'top', 'bottom', 'left', 'right' keys
+    """
     try:
-        horizontal_lines = sorted([line for line in grid_lines if line[1] == line[3]], 
-                                 key=lambda l: l[1])
-        vertical_lines = sorted([line for line in grid_lines if line[0] == line[2]], 
-                               key=lambda l: l[0])
+        top = cell_lines['top'][1]
+        bottom = cell_lines['bottom'][1]
+        left = cell_lines['left'][0]
+        right = cell_lines['right'][0]
         
         marker_x, marker_y = marker_coords
         
-        print(f"    Grid analysis:")
-        print(f"      Marker position: ({marker_x}, {marker_y})")
-        print(f"      Horizontal lines: {len(horizontal_lines)} - Y positions: {[l[1] for l in horizontal_lines]}")
-        print(f"      Vertical lines: {len(vertical_lines)} - X positions: {[l[0] for l in vertical_lines]}")
+        # Padding ekle
+        top = max(0, top + padding)
+        bottom = min(image.shape[0], bottom - padding)
+        left = max(0, left + padding)
+        right = min(image.shape[1], right - padding)
         
-        case_left = case_right = case_top = case_bottom = None
+        print(f"    ✂️  Crop bölgesi:")
+        print(f"       X: {left} → {right} (genişlik: {right-left})")
+        print(f"       Y: {top} → {bottom} (yükseklik: {bottom-top})")
         
-        # Find vertical boundaries
-        for i in range(len(vertical_lines) - 1):
-            if vertical_lines[i][0] <= marker_x < vertical_lines[i + 1][0]:
-                case_left = vertical_lines[i][0]
-                case_right = vertical_lines[i + 1][0]
-                print(f"      Found vertical bounds: {case_left} to {case_right}")
-                break
+        # Crop
+        cropped = image[top:bottom, left:right]
         
-        # If marker is before first line or after last line, use edges
-        if case_left is None:
-            if marker_x < vertical_lines[0][0]:
-                case_left = 0
-                case_right = vertical_lines[0][0]
-                print(f"      Marker before first vertical line, using: 0 to {case_right}")
-            elif marker_x >= vertical_lines[-1][0]:
-                case_left = vertical_lines[-1][0]
-                case_right = image.shape[1]
-                print(f"      Marker after last vertical line, using: {case_left} to {case_right}")
+        # Yeni marker koordinatları
+        new_marker_x = marker_x - left
+        new_marker_y = marker_y - top
         
-        # Find horizontal boundaries
-        for i in range(len(horizontal_lines) - 1):
-            if horizontal_lines[i][1] <= marker_y < horizontal_lines[i + 1][1]:
-                case_top = horizontal_lines[i][1]
-                case_bottom = horizontal_lines[i + 1][1]
-                print(f"      Found horizontal bounds: {case_top} to {case_bottom}")
-                break
+        print(f"    📍 Yeni marker: ({new_marker_x}, {new_marker_y})")
         
-        # If marker is before first line or after last line, use edges
-        if case_top is None:
-            if marker_y < horizontal_lines[0][1]:
-                case_top = 0
-                case_bottom = horizontal_lines[0][1]
-                print(f"      Marker before first horizontal line, using: 0 to {case_bottom}")
-            elif marker_y >= horizontal_lines[-1][1]:
-                case_top = horizontal_lines[-1][1]
-                case_bottom = image.shape[0]
-                print(f"      Marker after last horizontal line, using: {case_top} to {case_bottom}")
+        if debug:
+            debug_img = image.copy()
+            cv2.rectangle(debug_img, (left, top), (right, bottom), (0, 255, 255), 3)
+            cv2.circle(debug_img, (marker_x, marker_y), 10, (0, 0, 255), -1)
+            cv2.imwrite("debug_03_crop_region.png", debug_img)
+            cv2.imwrite("debug_04_cropped_cell.png", cropped)
         
-        if all([case_left is not None, case_right is not None, case_top is not None, case_bottom is not None]):
-            cropped_img = image[case_top:case_bottom, case_left:case_right]
-            new_marker_x = marker_x - case_left
-            new_marker_y = marker_y - case_top
-            print(f"      ✓ Successfully cropped to cell: {case_right - case_left}x{case_bottom - case_top}")
-            return cropped_img, (new_marker_x, new_marker_y)
-        
-        print(f"      ❌ Failed to find all boundaries:")
-        print(f"         Left: {case_left}, Right: {case_right}, Top: {case_top}, Bottom: {case_bottom}")
-        return None, None
+        return cropped, (new_marker_x, new_marker_y)
     
     except Exception as e:
-        print(f"Cropping error: {e}")
+        print(f"❌ Crop hatası: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None
 
 
@@ -438,17 +550,32 @@ def get_full_coordinates(base_coord, screen_img, color_rgb, icon_name):
     cv2.imwrite(f"debug_{icon_name.lower()}_cropped.png", cropped)
     print(f"  ✓ Cropped to {cropped.shape[1]}x{cropped.shape[0]} around icon")
     
-    # Detect grid lines
-    grid_lines = detect_grid_lines(cropped)
+    # SMART GRID DETECTION - Sadece 2 çizgi bul, diğer 2'sini oluştur
+    # Cropped image içindeki marker pozisyonu (merkez)
+    cropped_marker_x = x - x_start
+    cropped_marker_y = y - y_start
     
-    if not grid_lines or len(grid_lines) < 4:
-        print(f"  ❌ Not enough grid lines detected ({len(grid_lines)} lines)")
+    cell_lines = detect_grid_lines_smart(
+        cropped, 
+        (cropped_marker_x, cropped_marker_y),
+        cell_size=CELL_SIZE,
+        debug=True
+    )
+    
+    if cell_lines is None:
+        print(f"  ❌ Grid algılanamadı")
         return base_coord
     
-    print(f"  ✓ Detected {len(grid_lines)} grid lines")
+    print(f"  ✅ Grid sınırları belirlendi")
     
     # Crop to specific grid cell
-    cell_img, new_coords = crop_to_grid_cell(cropped, grid_lines, INTERNAL_MARKER_COORDS)
+    cell_img, new_coords = crop_to_cell(
+        cropped, 
+        cell_lines, 
+        (cropped_marker_x, cropped_marker_y),
+        padding=5,
+        debug=True
+    )
     
     if cell_img is None:
         print(f"  ❌ Could not crop to grid cell")
@@ -789,7 +916,7 @@ class FiringSolutionOverlay:
 # Main Program
 #####################################
 def on_player_unlock():
-    """Callback when Ctrl+P+C is pressed"""
+    """Callback when Ctrl+' is pressed"""
     global player_locked, locked_player_coord
     player_locked = False
     locked_player_coord = None
@@ -797,7 +924,7 @@ def on_player_unlock():
 
 
 def on_marker_unlock():
-    """Callback when Ctrl+M+C is pressed"""
+    """Callback when Ctrl+; is pressed"""
     global marker_locked, locked_marker_coord
     marker_locked = False
     locked_marker_coord = None
@@ -807,7 +934,7 @@ def on_marker_unlock():
 def coordinate_reader_loop(overlay):
     """Main coordinate reading loop running in background thread"""
     print("=" * 50)
-    print("SQUAD Coordinate Reader")
+    print("SQUAD Coordinate Reader - SMART GRID DETECTION")
     print("=" * 50)
     print("\nPress Ctrl+' to unlock PLAYER coordinate")
     print("Press Ctrl+; to unlock MARKER coordinate")

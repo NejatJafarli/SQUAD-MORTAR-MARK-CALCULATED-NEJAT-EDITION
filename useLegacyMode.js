@@ -169,7 +169,7 @@ class MortarCalculator {
 
 //foreach maps find name ==Jensen
 
-let map = MAPS.find(m => m.name === "Yehorivka");
+let map = MAPS.find(m => m.name === "Jensen");
 
 
 // Initialize MortarCalculator once
