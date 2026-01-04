@@ -7,6 +7,8 @@ import { MAPS } from "./data/maps.js";
 import SquadFiringSolution from "./squadFiringSolutionOld.js";
 import SquadHeightmap from "./squadHeightmaps.js";
 import fs from 'fs';
+import { Weapon } from "./squadWeapons.js";
+import { WEAPONS } from "./data/weapons.js";
 
 
 
@@ -160,7 +162,34 @@ class MortarCalculator {
         aPos = { lat: -aPos.lng * this.map.gameToMapScale, lng: aPos.lat * this.map.gameToMapScale };
         bPos = { lat: -bPos.lng * this.map.gameToMapScale, lng: bPos.lat * this.map.gameToMapScale };
 
-        let firingSolution = new SquadFiringSolution(aPos, bPos, this.map, 0, this.heightMap);
+        
+        let weapon = new Weapon(
+            selectedWeapon.name,
+            selectedWeapon.velocity,
+            selectedWeapon.deceleration,
+            selectedWeapon.decelerationTime,
+            selectedWeapon.gravityScale,
+            selectedWeapon.minElevation,
+            selectedWeapon.unit,
+            selectedWeapon.logo,
+            selectedWeapon.marker,
+            selectedWeapon.type,
+            selectedWeapon.angleType,
+            selectedWeapon.elevationPrecision,
+            selectedWeapon.minDistance,
+            selectedWeapon.moa,
+            selectedWeapon.explosionDamage,
+            selectedWeapon.explosionRadius[0],
+            selectedWeapon.explosionRadius[1],
+            selectedWeapon.explosionDistanceFromImpact,
+            selectedWeapon.damageFallOff,
+            selectedWeapon.shells,
+            selectedWeapon.heightOffset,
+            selectedWeapon.angleOffset,
+            selectedWeapon.projectileLifespan
+        );
+
+        let firingSolution = new SquadFiringSolution(aPos, bPos, this.map, 0, this.heightMap,weapon);
 
         return firingSolution;
     }
@@ -169,12 +198,35 @@ class MortarCalculator {
 
 //foreach maps find name ==Jensen
 
-let map = MAPS.find(m => m.name === "Jensen");
+// Get map name and weapon from command line arguments
+const mapName = process.argv[2] || "Jensen";
+const weaponName = process.argv[3] || "Mortar";
 
+let map = MAPS.find(m => m.name === mapName);
+
+if (!map) {
+    console.error(`❌ Map "${mapName}" not found!`);
+    console.log("\nAvailable maps:");
+    MAPS.forEach(m => console.log(`  - ${m.name}`));
+    process.exit(1);
+}
+
+// Find weapon by name
+let selectedWeapon = WEAPONS.find(w => w.name === weaponName);
+
+if (!selectedWeapon) {
+    console.error(`❌ Weapon "${weaponName}" not found!`);
+    console.log("\nAvailable weapons:");
+    WEAPONS.forEach(w => console.log(`  - ${w.name}`));
+    console.log(`\nUsing default weapon: Mortar`);
+    selectedWeapon = WEAPONS[0]; // Default to Mortar
+}
 
 // Initialize MortarCalculator once
 let MortarCalculatorObj = new MortarCalculator(map);
-console.log("Mortar Calculator initialized for Yehorivka map");
+console.log(`✅ Mortar Calculator initialized`);
+console.log(`   Map: ${mapName}`);
+console.log(`   Weapon: ${selectedWeapon.name}`);
 
 // Store last coordinates to detect changes
 let lastPlayerCoord = null;
@@ -243,7 +295,8 @@ function calculateFiringSolution() {
             elevation: elevation,
             elevationUnit: res.activeWeapon.unit,
             bearing: bearing,
-            distance: Math.round(res.distance * 10) / 10
+            distance: Math.round(res.distance * 10) / 10,
+            weapon: selectedWeapon.name
         };
 
         fs.writeFileSync('firing_solution.json', JSON.stringify(firingSolutionData, null, 4), 'utf8');

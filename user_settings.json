@@ -1,0 +1,7 @@
+{
+    "sensitivity": 1.0,
+    "dpi_scale": 1.25,
+    "detection_mode": 2,
+    "tesseract_path": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+    "resolution": "2560x1440"
+}

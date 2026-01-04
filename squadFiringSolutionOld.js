@@ -3,35 +3,11 @@ import { Weapon } from "./squadWeapons.js";
 
 export default class SquadFiringSolution {
 
-    constructor(weaponLatLng, targetLatLng, map, heightPadding,heightmap) {
+    constructor(weaponLatLng, targetLatLng, map, heightPadding, heightmap, weapon) {
         this.map = map;
         this.heightmap = heightmap;
 
-        this.activeWeapon = new Weapon(
-            WEAPONS[0].name,
-            WEAPONS[0].velocity,
-            WEAPONS[0].deceleration,
-            WEAPONS[0].decelerationTime,
-            WEAPONS[0].gravityScale,
-            WEAPONS[0].minElevation,
-            WEAPONS[0].unit,
-            WEAPONS[0].logo,
-            WEAPONS[0].marker,
-            WEAPONS[0].type,
-            WEAPONS[0].angleType,
-            WEAPONS[0].elevationPrecision,
-            WEAPONS[0].minDistance,
-            WEAPONS[0].moa,
-            WEAPONS[0].explosionDamage,
-            WEAPONS[0].explosionRadius[0],
-            WEAPONS[0].explosionRadius[1],
-            WEAPONS[0].explosionDistanceFromImpact,
-            WEAPONS[0].damageFallOff,
-            WEAPONS[0].shells,
-            WEAPONS[0].heightOffset,
-            WEAPONS[0].angleOffset,
-            WEAPONS[0].projectileLifespan
-        );
+        this.activeWeapon = weapon;
 
 
         this.weaponLatLng = weaponLatLng;

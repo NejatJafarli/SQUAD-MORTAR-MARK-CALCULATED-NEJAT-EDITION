@@ -104,7 +104,7 @@ export var WEAPONS = [
         projectileLifespan: 20,
     },
     {
-        name: "BM-21Grad",
+        name: "BM-21Grad-UKRANIA",
         velocity: 200,
         deceleration: 0,
         decelerationTime : 0,
